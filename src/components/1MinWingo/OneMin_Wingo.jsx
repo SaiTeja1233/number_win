@@ -7,6 +7,346 @@ import { getISTTime, fetchOptimizedData } from "../../predictionLogic";
 import RefreshIcon from "./RefreshIcon";
 import LoadingSpinner from "./LoadingSpinner";
 
+// ==================== ADVANCED PREDICTION LOGIC ====================
+
+/**
+ * Utility: Determines if a number is SMALL (0-4) or BIG (5-9)
+ */
+const getSize = (num) => {
+    return num <= 4 ? "SMALL" : "BIG";
+};
+
+/**
+ * Utility: Determines if a number is RED (even) or GREEN (odd)
+ * Special cases: 0 = RED, 5 = GREEN
+ */
+const getColor = (num) => {
+    if (num === 0) return "RED";
+    if (num === 5) return "GREEN";
+    return num % 2 === 0 ? "RED" : "GREEN";
+};
+
+/**
+ * COLOR PREDICTION LOGIC
+ * Analyzes historical color patterns to predict next color.
+ */
+const getColorPrediction = (historyArray) => {
+    if (historyArray.length < 3)
+        return {
+            type: "WAIT",
+            reason: "Need more data",
+            predict: null,
+            confidence: "LOW",
+        };
+
+    const lastResults = historyArray.slice(0, 10);
+    const colors = lastResults.map((r) => r.color);
+
+    // 1. Dragon Trend Detection (streak of 3 or more identical colors)
+    let currentStreak = 1;
+    for (let i = 0; i < colors.length - 1; i++) {
+        if (colors[i] === colors[i + 1]) currentStreak++;
+        else break;
+    }
+
+    if (currentStreak >= 3) {
+        return {
+            predict: colors[0] === "RED" ? "GREEN" : "RED",
+            type: "DRAGON_BREAK",
+            confidence: "HIGH",
+            reason: `${colors[0]} streak of ${currentStreak} - expecting opposite`,
+        };
+    }
+
+    // 2. Mirror Trend Detection (AB-AB pattern)
+    if (
+        colors.length >= 4 &&
+        colors[0] !== colors[1] &&
+        colors[1] === colors[2] &&
+        colors[2] !== colors[3]
+    ) {
+        return {
+            predict: colors[1] === "RED" ? "GREEN" : "RED",
+            type: "MIRROR",
+            confidence: "MEDIUM",
+            reason: "AB-AB mirror pattern - expecting opposite",
+        };
+    }
+
+    // 3. Imbalance correction (extreme dominance of one color in last 10)
+    const redCount = colors.filter((c) => c === "RED").length;
+    const greenCount = colors.filter((c) => c === "GREEN").length;
+
+    if (redCount >= 7) {
+        return {
+            predict: "GREEN",
+            type: "CORRECTION",
+            confidence: "HIGH",
+            reason: `RED overload (${redCount}/10) → expecting GREEN`,
+        };
+    }
+    if (greenCount >= 7) {
+        return {
+            predict: "RED",
+            type: "CORRECTION",
+            confidence: "HIGH",
+            reason: `GREEN overload (${greenCount}/10) → expecting RED`,
+        };
+    }
+
+    // 4. Alternating pattern detection
+    let alternations = 0;
+    for (let i = 0; i < colors.length - 1; i++) {
+        if (colors[i] !== colors[i + 1]) alternations++;
+    }
+    const altRate = colors.length > 1 ? alternations / (colors.length - 1) : 0;
+
+    if (altRate > 0.7) {
+        const lastColor = colors[0];
+        return {
+            predict: lastColor === "RED" ? "GREEN" : "RED",
+            type: "ALTERNATING",
+            confidence: "MEDIUM",
+            reason: "High alternation pattern",
+        };
+    }
+
+    // Default: Opposite of most frequent in last 5
+    const last5Colors = colors.slice(0, 5);
+    const freq = {};
+    for (let c of last5Colors) {
+        freq[c] = (freq[c] || 0) + 1;
+    }
+    let mostFrequent = last5Colors[0];
+    for (let c in freq) {
+        if (freq[c] > freq[mostFrequent]) mostFrequent = c;
+    }
+
+    return {
+        predict: mostFrequent === "RED" ? "GREEN" : "RED",
+        type: "REVERSAL",
+        confidence: "MEDIUM",
+        reason: `Most frequent ${mostFrequent} → expecting opposite`,
+    };
+};
+
+/**
+ * SIZE PREDICTION LOGIC
+ * Analyzes historical size patterns to predict next size.
+ */
+const getSizePrediction = (historyArray) => {
+    if (historyArray.length < 3)
+        return {
+            type: "WAIT",
+            reason: "Need more data",
+            predict: null,
+            confidence: "LOW",
+        };
+
+    const lastResults = historyArray.slice(0, 10);
+    const sizes = lastResults.map((r) => r.size);
+
+    // 1. Dragon streak break
+    let currentStreak = 1;
+    for (let i = 0; i < sizes.length - 1; i++) {
+        if (sizes[i] === sizes[i + 1]) currentStreak++;
+        else break;
+    }
+
+    if (currentStreak >= 3) {
+        return {
+            predict: sizes[0] === "SMALL" ? "BIG" : "SMALL",
+            type: "STREAK_BREAK",
+            confidence: "HIGH",
+            reason: `${sizes[0]} streak of ${currentStreak} - expecting opposite`,
+        };
+    }
+
+    // 2. Alternating pattern detection
+    let alternations = 0;
+    for (let i = 0; i < sizes.length - 1; i++) {
+        if (sizes[i] !== sizes[i + 1]) alternations++;
+    }
+    const altRate = sizes.length > 1 ? alternations / (sizes.length - 1) : 0;
+
+    if (altRate > 0.7) {
+        const lastSize = sizes[0];
+        return {
+            predict: lastSize === "SMALL" ? "BIG" : "SMALL",
+            type: "ALTERNATING",
+            confidence: "MEDIUM",
+            reason: "High alternation pattern",
+        };
+    }
+
+    // 3. Imbalance correction
+    const bigCount = sizes.filter((s) => s === "BIG").length;
+    const smallCount = sizes.filter((s) => s === "SMALL").length;
+
+    if (bigCount >= 7) {
+        return {
+            predict: "SMALL",
+            type: "CORRECTION",
+            confidence: "HIGH",
+            reason: `BIG overload (${bigCount}/10) → expecting SMALL`,
+        };
+    }
+    if (smallCount >= 7) {
+        return {
+            predict: "BIG",
+            type: "CORRECTION",
+            confidence: "HIGH",
+            reason: `SMALL overload (${smallCount}/10) → expecting BIG`,
+        };
+    }
+
+    // Default: Opposite of most frequent in last 5
+    const last5Sizes = sizes.slice(0, 5);
+    const freq = {};
+    for (let s of last5Sizes) {
+        freq[s] = (freq[s] || 0) + 1;
+    }
+    let mostFrequent = last5Sizes[0];
+    for (let s in freq) {
+        if (freq[s] > freq[mostFrequent]) mostFrequent = s;
+    }
+
+    return {
+        predict: mostFrequent === "SMALL" ? "BIG" : "SMALL",
+        type: "REVERSAL",
+        confidence: "MEDIUM",
+        reason: `Most frequent ${mostFrequent} → expecting opposite`,
+    };
+};
+
+/**
+ * DECISION ENGINE: Chooses whether to predict SIZE or COLOR
+ */
+function decidePredictionType(
+    historyArray,
+    lastWasLoss = false,
+    previousType = null,
+) {
+    if (historyArray.length < 3)
+        return { type: "color", reason: "Need more data" };
+
+    const sizePrediction = getSizePrediction(historyArray);
+    const colorPrediction = getColorPrediction(historyArray);
+
+    // If last prediction was a loss, force switch to the other type
+    if (lastWasLoss && previousType) {
+        if (previousType === "size") {
+            return {
+                type: "color",
+                reason: "LAST PREDICTION LOST → switching to COLOR",
+            };
+        } else if (previousType === "color") {
+            return {
+                type: "size",
+                reason: "LAST PREDICTION LOST → switching to SIZE",
+            };
+        }
+    }
+
+    // If SIZE has HIGH confidence, use SIZE
+    if (sizePrediction.confidence === "HIGH") {
+        return { type: "size", reason: "SIZE has HIGH confidence" };
+    }
+
+    // If COLOR has HIGH confidence, use COLOR
+    if (colorPrediction.confidence === "HIGH") {
+        return { type: "color", reason: "COLOR has HIGH confidence" };
+    }
+
+    // Alternate between SIZE and COLOR for variety
+    const shouldUseSize = Math.random() < 0.5;
+    return {
+        type: shouldUseSize ? "size" : "color",
+        reason: shouldUseSize
+            ? "Random selection - SIZE"
+            : "Random selection - COLOR",
+    };
+}
+
+/**
+ * MAIN PREDICTION FUNCTION - Uses advanced pattern recognition
+ */
+const generateAdvancedPrediction = (historyData, lastResultInfo = null) => {
+    if (!Array.isArray(historyData) || historyData.length < 3) {
+        return null;
+    }
+
+    // Convert history to analysis format (oldest to newest)
+    const analysisHistory = [...historyData].reverse().map((item) => ({
+        period: item.issueNumber,
+        color: getColor(parseInt(item.number)),
+        size: getSize(parseInt(item.number)),
+        number: parseInt(item.number),
+    }));
+
+    const lastWasLoss = lastResultInfo?.wasLoss || false;
+    const previousType = lastResultInfo?.predictedType || null;
+
+    const decision = decidePredictionType(
+        analysisHistory,
+        lastWasLoss,
+        previousType,
+    );
+    let predictionResult;
+    let predictedType;
+
+    if (decision.type === "size") {
+        predictionResult = getSizePrediction(analysisHistory);
+        predictedType = "SIZE";
+    } else {
+        predictionResult = getColorPrediction(analysisHistory);
+        predictedType = "COLOR";
+    }
+
+    if (!predictionResult.predict) {
+        predictionResult = {
+            predict: predictedType === "SIZE" ? "SMALL" : "RED",
+            type: "DEFAULT",
+            confidence: "LOW",
+            reason: "Using default prediction",
+        };
+    }
+
+    // Generate associated numbers based on prediction
+    let associatedNumbers = [];
+    if (predictedType === "COLOR") {
+        if (predictionResult.predict === "RED") {
+            associatedNumbers = [0, 2, 4, 6, 8];
+        } else {
+            associatedNumbers = [1, 3, 5, 7, 9];
+        }
+    } else {
+        if (predictionResult.predict === "BIG") {
+            associatedNumbers = [5, 6, 7, 8, 9];
+        } else {
+            associatedNumbers = [0, 1, 2, 3, 4];
+        }
+    }
+
+    const nextPeriodBigInt = BigInt(historyData[0].issueNumber) + 1n;
+
+    return {
+        period: String(nextPeriodBigInt),
+        mainPrediction: predictionResult.predict,
+        associatedNumbers: associatedNumbers,
+        type: predictedType,
+        predictionMeta: {
+            patternType: predictionResult.type,
+            confidence: predictionResult.confidence,
+            reason: predictionResult.reason,
+            switchReason: decision.reason,
+            dataPoints: analysisHistory.length,
+        },
+        outcome: null,
+        actual: null,
+    };
+};
+
 // A custom chart component to render the SVG based on history data
 const WinGoChart = ({ history, getColorFromNumber }) => {
     const chartRef = useRef(null);
@@ -137,13 +477,13 @@ const PredictionGlassPopup = ({
     prediction,
     actualResult,
     resultType,
+    patternInfo,
     onClose,
 }) => {
-    // Auto-close the popup after a few seconds
     useEffect(() => {
         const timer = setTimeout(() => {
             onClose();
-        }, 3000); // 3 seconds instead of 5
+        }, 3000);
 
         return () => clearTimeout(timer);
     }, [onClose]);
@@ -161,6 +501,11 @@ const PredictionGlassPopup = ({
                 <p>
                     <strong>Actual Result:</strong> {actualResult}
                 </p>
+                {patternInfo && (
+                    <p className="pattern-info">
+                        <strong>Pattern:</strong> {patternInfo}
+                    </p>
+                )}
                 <div className={`result-status ${resultType}`}>
                     {resultType.toUpperCase()}
                 </div>
@@ -177,11 +522,11 @@ const OneMinWingo = () => {
     const [aiPredictionDisplay, setAiPredictionDisplay] = useState(null);
     const [isFadingOut, setIsFadingOut] = useState(false);
     const [isShaking, setIsShaking] = useState(false);
-    const [predictionMode, setPredictionMode] = useState("COLOR");
     const [lastPrediction, setLastPrediction] = useState(null);
     const [activeView, setActiveView] = useState("chart");
     const [predictionRecords, setPredictionRecords] = useState([]);
     const [popupData, setPopupData] = useState(null);
+    const [lastResultInfo, setLastResultInfo] = useState(null);
     const navigate = useNavigate();
 
     const lastEvaluatedPeriodRef = useRef(null);
@@ -200,189 +545,26 @@ const OneMinWingo = () => {
         return number % 2 === 0 ? "RED" : "GREEN";
     }, []);
 
-    const calculateAndPredict = useCallback(
-        (data, mode) => {
-            if (!Array.isArray(data) || data.length === 0) {
-                setAiPredictionDisplay(null);
-                return;
-            }
+    // Updated prediction handler using advanced logic
+    const handleAdvancedPredict = () => {
+        if (!history || history.length < 3) {
+            setAiPredictionDisplay(null);
+            return;
+        }
 
-            const nextPeriodBigInt = BigInt(data[0].issueNumber) + 1n;
-            const nextPeriod = String(nextPeriodBigInt);
-            const relevantHistory = data.slice(0, 50);
+        const prediction = generateAdvancedPrediction(history, lastResultInfo);
 
-            let mainPrediction = "";
-            let predictedNumbers = [];
-            let predictionType = mode;
-
-            if (mode === "COLOR") {
-                const colorScores = { RED: 0, GREEN: 0 };
-                const evenNumbers = [0, 2, 4, 6, 8];
-                const oddNumbers = [1, 3, 5, 7, 9];
-
-                relevantHistory.forEach((item, index) => {
-                    const number = parseInt(item.number);
-                    const weight = 50 - index;
-                    if (getColorFromNumber(number) === "RED") {
-                        colorScores.RED += weight;
-                    } else {
-                        colorScores.GREEN += weight;
-                    }
-                });
-                mainPrediction =
-                    colorScores.RED > colorScores.GREEN ? "RED" : "GREEN";
-
-                const targetNumbers =
-                    mainPrediction === "GREEN" ? oddNumbers : evenNumbers;
-                const numberFrequencyMap = relevantHistory.reduce(
-                    (acc, item) => {
-                        const num = parseInt(item.number);
-                        if (targetNumbers.includes(num)) {
-                            acc[num] = (acc[num] || 0) + 1;
-                        }
-                        return acc;
-                    },
-                    {}
-                );
-                const sortedNumbers = Object.keys(numberFrequencyMap)
-                    .sort(
-                        (a, b) => numberFrequencyMap[b] - numberFrequencyMap[a]
-                    )
-                    .map(Number);
-                predictedNumbers = sortedNumbers.slice(0, 2);
-                if (predictedNumbers.length < 2) {
-                    const existingNumbers = new Set(predictedNumbers);
-                    const numbersToAdd = targetNumbers
-                        .filter((num) => !existingNumbers.has(num))
-                        .sort((a, b) => b - a);
-                    predictedNumbers = [
-                        ...predictedNumbers,
-                        ...numbersToAdd,
-                    ].slice(0, 2);
-                }
-            } else if (mode === "SIZE") {
-                const allNumbers = relevantHistory.map((item) =>
-                    parseInt(item.number)
-                );
-                const sumOfNumbers = allNumbers.reduce(
-                    (sum, num) => sum + num,
-                    0
-                );
-                const lastDigitOfSum = sumOfNumbers % 10;
-                mainPrediction = lastDigitOfSum >= 5 ? "BIG" : "SMALL";
-
-                const targetNumbers =
-                    mainPrediction === "BIG"
-                        ? [5, 6, 7, 8, 9]
-                        : [0, 1, 2, 3, 4];
-                const numberFrequencyMap = relevantHistory.reduce(
-                    (acc, item) => {
-                        const num = parseInt(item.number);
-                        if (targetNumbers.includes(num)) {
-                            acc[num] = (acc[num] || 0) + 1;
-                        }
-                        return acc;
-                    },
-                    {}
-                );
-                const sortedNumbers = Object.keys(numberFrequencyMap)
-                    .sort(
-                        (a, b) => numberFrequencyMap[b] - numberFrequencyMap[a]
-                    )
-                    .map(Number);
-                predictedNumbers = sortedNumbers.slice(0, 2);
-                if (predictedNumbers.length < 2) {
-                    const existingNumbers = new Set(predictedNumbers);
-                    const numbersToAdd = targetNumbers
-                        .filter((num) => !existingNumbers.has(num))
-                        .sort((a, b) => b - a);
-                    predictedNumbers = [
-                        ...predictedNumbers,
-                        ...numbersToAdd,
-                    ].slice(0, 2);
-                }
-            } else if (mode === "STREAK") {
-                const lastResult = relevantHistory[0];
-                const lastNumber = parseInt(lastResult.number);
-                const lastColor = getColorFromNumber(lastNumber);
-                const lastSize = getSizeFromNumber(lastNumber);
-
-                let streakCount = 0;
-                let lastValue = null;
-
-                if (lastResult) {
-                    // Determine the most recent streak
-                    if (lastColor === "RED" || lastColor === "GREEN") {
-                        lastValue = lastColor;
-                        for (const item of relevantHistory) {
-                            if (
-                                getColorFromNumber(parseInt(item.number)) ===
-                                lastValue
-                            ) {
-                                streakCount++;
-                            } else {
-                                break;
-                            }
-                        }
-                        if (streakCount >= 2) {
-                            // Consider a streak of at least 2
-                            mainPrediction = lastColor;
-                            predictedNumbers =
-                                lastColor === "GREEN" ? [5, 7, 9] : [0, 2, 8];
-                        }
-                    }
-
-                    if (
-                        streakCount < 2 &&
-                        (lastSize === "BIG" || lastSize === "SMALL")
-                    ) {
-                        lastValue = lastSize;
-                        streakCount = 0;
-                        for (const item of relevantHistory) {
-                            if (
-                                getSizeFromNumber(parseInt(item.number)) ===
-                                lastValue
-                            ) {
-                                streakCount++;
-                            } else {
-                                break;
-                            }
-                        }
-                        if (streakCount >= 2) {
-                            mainPrediction = lastSize;
-                            predictedNumbers =
-                                lastSize === "BIG" ? [5, 7, 9] : [0, 2, 4];
-                        }
-                    }
-                }
-
-                // If no streak is found or it's too short, fallback to COLOR mode
-                if (streakCount < 2) {
-                    predictionType = "COLOR";
-                    return calculateAndPredict(data, "COLOR");
-                }
-            }
-
-            setAiPredictionDisplay({
-                period: nextPeriod,
-                mainPrediction: mainPrediction,
-                associatedNumbers: predictedNumbers,
-                type: predictionType,
-                outcome: null,
-                actual: null,
-            });
-
+        if (prediction) {
+            setAiPredictionDisplay(prediction);
             setLastPrediction({
-                period: nextPeriod,
-                mainPrediction: mainPrediction,
-                type: predictionType,
+                period: prediction.period,
+                mainPrediction: prediction.mainPrediction,
+                type: prediction.type,
+                predictedType: prediction.type === "COLOR" ? "color" : "size",
             });
-        },
-        [getColorFromNumber, getSizeFromNumber]
-    );
-
-    const handleAiPredict = () => {
-        calculateAndPredict(history, predictionMode);
+        } else {
+            setAiPredictionDisplay(null);
+        }
         setIsFadingOut(false);
     };
 
@@ -392,6 +574,10 @@ const OneMinWingo = () => {
             const predictionText = aiPredictionDisplay.mainPrediction;
             const predictedNumbersText =
                 aiPredictionDisplay.associatedNumbers.join(", ");
+            const patternType =
+                aiPredictionDisplay.predictionMeta?.patternType || "ANALYSIS";
+            const confidence =
+                aiPredictionDisplay.predictionMeta?.confidence || "MEDIUM";
 
             const textToCopy = `
 ╭⚬──────────────────⚬╮
@@ -399,6 +585,7 @@ const OneMinWingo = () => {
 │ ⏳ PERIOD  : ${nextPeriod}
 │ 🔮 PREDICTION : ${predictionText} (${aiPredictionDisplay.type})
 │ 🔢 NUMBERS  : ${predictedNumbersText}
+│ 📊 PATTERN  : ${patternType} (${confidence} confidence)
 ╰⚬──────────────────⚬╯
 `;
             try {
@@ -412,19 +599,20 @@ const OneMinWingo = () => {
     };
 
     const handleResult = useCallback(
-        (period, prediction, actualResult, resultType) => {
+        (period, prediction, actualResult, resultType, patternInfo) => {
             setPopupData({
                 period,
                 prediction,
                 actualResult,
                 resultType,
+                patternInfo,
             });
 
             setTimeout(() => {
                 setPopupData(null);
             }, 3000);
         },
-        []
+        [],
     );
 
     const fetchHistory = useCallback(
@@ -448,71 +636,43 @@ const OneMinWingo = () => {
 
                             const lastActualEntry = list.find(
                                 (item) =>
-                                    item.issueNumber === lastPrediction.period
+                                    item.issueNumber === lastPrediction.period,
                             );
                             if (lastActualEntry) {
                                 const lastActualNumber = parseInt(
-                                    lastActualEntry.number
+                                    lastActualEntry.number,
                                 );
+                                const actualColor =
+                                    getColorFromNumber(lastActualNumber);
+                                const actualSize =
+                                    getSizeFromNumber(lastActualNumber);
+
+                                let isCorrect = false;
+                                let actualResult = "";
+
+                                if (lastPrediction.type === "COLOR") {
+                                    isCorrect =
+                                        lastPrediction.mainPrediction ===
+                                        actualColor;
+                                    actualResult = actualColor;
+                                } else if (lastPrediction.type === "SIZE") {
+                                    isCorrect =
+                                        lastPrediction.mainPrediction ===
+                                        actualSize;
+                                    actualResult = actualSize;
+                                }
+
+                                // Update lastResultInfo for next prediction
+                                setLastResultInfo({
+                                    wasLoss: !isCorrect,
+                                    predictedType:
+                                        lastPrediction.predictedType ||
+                                        (lastPrediction.type === "COLOR"
+                                            ? "color"
+                                            : "size"),
+                                });
 
                                 setPredictionRecords((prevRecords) => {
-                                    let isCorrect = false;
-                                    let actualResult = "";
-
-                                    if (lastPrediction.type === "COLOR") {
-                                        const actualColor =
-                                            getColorFromNumber(
-                                                lastActualNumber
-                                            );
-                                        isCorrect =
-                                            lastPrediction.mainPrediction ===
-                                            actualColor;
-                                        actualResult = actualColor;
-                                    } else if (lastPrediction.type === "SIZE") {
-                                        const actualSize =
-                                            getSizeFromNumber(lastActualNumber);
-                                        isCorrect =
-                                            lastPrediction.mainPrediction ===
-                                            actualSize;
-                                        actualResult = actualSize;
-                                    } else if (
-                                        lastPrediction.type === "STREAK"
-                                    ) {
-                                        const actualColor =
-                                            getColorFromNumber(
-                                                lastActualNumber
-                                            );
-                                        const actualSize =
-                                            getSizeFromNumber(lastActualNumber);
-                                        if (
-                                            lastPrediction.mainPrediction ===
-                                                actualColor ||
-                                            lastPrediction.mainPrediction ===
-                                                actualSize
-                                        ) {
-                                            isCorrect = true;
-                                        }
-                                        actualResult = `${actualColor}/${actualSize}`; // Display both for streak
-                                    }
-
-                                    // Cycle through the modes on a loss, stay on win
-                                    setPredictionMode((prevMode) => {
-                                        if (isCorrect) {
-                                            return prevMode;
-                                        } else {
-                                            switch (prevMode) {
-                                                case "COLOR":
-                                                    return "SIZE";
-                                                case "SIZE":
-                                                    return "STREAK";
-                                                case "STREAK":
-                                                    return "COLOR";
-                                                default:
-                                                    return "COLOR";
-                                            }
-                                        }
-                                    });
-
                                     const currentPrediction = {
                                         period: lastPrediction.period,
                                         prediction:
@@ -527,7 +687,8 @@ const OneMinWingo = () => {
                                         lastPrediction.period,
                                         lastPrediction.mainPrediction,
                                         actualResult,
-                                        isCorrect ? "win" : "loss"
+                                        isCorrect ? "win" : "loss",
+                                        null,
                                     );
 
                                     return [currentPrediction, ...prevRecords];
@@ -550,15 +711,15 @@ const OneMinWingo = () => {
             getColorFromNumber,
             getSizeFromNumber,
             handleResult,
-        ]
+        ],
     );
 
     const handleRefresh = () => {
         setIsShaking(true);
         fetchHistory();
         setAiPredictionDisplay(null);
-        setPredictionMode("COLOR");
         setLastPrediction(null);
+        setLastResultInfo(null);
         setIsFadingOut(false);
         setPredictionRecords([]);
         setPopupData(null);
@@ -596,10 +757,10 @@ const OneMinWingo = () => {
         aiPredictionDisplay?.type === "COLOR"
             ? aiPredictionDisplay.mainPrediction?.toLowerCase()
             : aiPredictionDisplay?.type === "SIZE"
-            ? aiPredictionDisplay.mainPrediction?.toLowerCase() === "small"
-                ? "bg-small"
-                : "bg-big"
-            : ""
+              ? aiPredictionDisplay.mainPrediction?.toLowerCase() === "small"
+                  ? "bg-small"
+                  : "bg-big"
+              : ""
     } ${isFadingOut ? "is-fading-out" : ""}`.trim();
 
     return (
@@ -610,6 +771,7 @@ const OneMinWingo = () => {
                     prediction={popupData.prediction}
                     actualResult={popupData.actualResult}
                     resultType={popupData.resultType}
+                    patternInfo={popupData.patternInfo}
                     onClose={() => setPopupData(null)}
                 />
             )}
@@ -647,6 +809,11 @@ const OneMinWingo = () => {
                         <p className="wingo-period">
                             Period: {aiPredictionDisplay.period}
                         </p>
+                        {aiPredictionDisplay.predictionMeta && (
+                            <p className="pattern-badge">
+                                {aiPredictionDisplay.predictionMeta.patternType}
+                            </p>
+                        )}
                     </div>
                     <h3 className="wingo-prediction-text">
                         {aiPredictionDisplay.mainPrediction}
@@ -654,14 +821,26 @@ const OneMinWingo = () => {
                     <p className="wingo-prediction-numbers">
                         {aiPredictionDisplay.associatedNumbers.join(", ")}
                     </p>
+                    {aiPredictionDisplay.predictionMeta && (
+                        <p className="prediction-reason">
+                            {aiPredictionDisplay.predictionMeta.reason}
+                        </p>
+                    )}
                 </div>
             )}
 
-            {!aiPredictionDisplay && (
+            {!aiPredictionDisplay && history.length >= 3 && (
                 <div className="svg-frame">
                     <LoadingSpinner />
                 </div>
             )}
+
+            {history.length < 3 && (
+                <div className="waiting-data">
+                    <p>Loading historical data... ({history.length}/3)</p>
+                </div>
+            )}
+
             {error && (
                 <p style={{ color: "red", textAlign: "center" }}>{error}</p>
             )}
@@ -669,10 +848,11 @@ const OneMinWingo = () => {
             <div className="button-wrapper">
                 <div className="prediction-control-box">
                     <button
-                        onClick={handleAiPredict}
+                        onClick={handleAdvancedPredict}
                         className="ai-predict-btn"
+                        disabled={history.length < 3}
                     >
-                        AI PREDICT.X
+                        AI PREDICT.X {history.length < 3 && "(Need 3+ results)"}
                     </button>
                 </div>
 
@@ -722,6 +902,7 @@ const OneMinWingo = () => {
                     Prediction History
                 </button>
             </div>
+
             {activeView === "chart" && (
                 <div className="chart-container">
                     <WinGoChart
@@ -775,7 +956,7 @@ const OneMinWingo = () => {
                                                 ) : number === 5 ? (
                                                     <>🟢🟣</>
                                                 ) : getColorFromNumber(
-                                                      number
+                                                      number,
                                                   ) === "GREEN" ? (
                                                     <>🟢</>
                                                 ) : (
@@ -790,6 +971,7 @@ const OneMinWingo = () => {
                     </table>
                 </div>
             )}
+
             {activeView === "prediction-history" && (
                 <div className="tableResult-container">
                     <table className="historyResult-table">
@@ -797,7 +979,7 @@ const OneMinWingo = () => {
                             <tr>
                                 <th>Period</th>
                                 <th>Prediction</th>
-                                <th> Result</th>
+                                <th>Result</th>
                                 <th>Outcome</th>
                             </tr>
                         </thead>
@@ -812,7 +994,8 @@ const OneMinWingo = () => {
                                             padding: "20px",
                                         }}
                                     >
-                                        No prediction history yet.
+                                        No prediction history yet. Click "AI
+                                        PREDICT.X" to start.
                                     </td>
                                 </tr>
                             ) : (
